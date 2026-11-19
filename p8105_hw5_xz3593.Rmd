@@ -25,6 +25,8 @@ birthday_result = tibble::tibble(
   probability = purrr::map_dbl(group_size,\(n) mean(replicate(10000, shared_birthday(n)))
   )
 )
+
+head(birthday_result)
 ```
 
 ```{r birthday-plot, fig.width=7, fig.height=4}
@@ -80,6 +82,8 @@ study_tidy = study_files |>
     values_to = "observation"
   ) |>
   dplyr::select(arm, subject_id, week, observation)
+
+head(study_tidy, 8)
 ```
 
 ```{r study-spaghetti, fig.width=7, fig.height=4}
@@ -107,3 +111,91 @@ In control group, observations go up and down from week to week without a clear 
 
 
 ## Problem 3
+
+```{r t-test-function}
+simulate_t_test = function(true_mu){
+  sample_values = rnorm(n = 30, mean = true_mu, sd = 5)
+  t.test(sample_values, mu = 0, alternative = "two.sided") |>
+    broom::tidy() |>
+    dplyr::select(estimate, p.value)
+}
+```
+
+```{r t-test-simulation}
+set.seed(1)
+
+t_test_result = tibble::tibble(true_mu = 0:6) |>
+  dplyr::mutate(
+    result = purrr::map(
+      true_mu,
+      \(mu) {
+        replicate(5000, simulate_t_test(mu), simplify = FALSE) |>
+          purrr::list_rbind()
+      }
+    )
+  ) |>
+  tidyr::unnest(result)
+```
+
+```{r t-test-summary}
+t_test_summary = t_test_result |>
+  dplyr::mutate(rejected = p.value < 0.05) |>
+  dplyr::group_by(true_mu) |>
+  dplyr::summarise(
+    rejection_rate = mean(rejected),
+    mean_estimate = mean(estimate),
+    mean_estimate_rejected = mean(estimate[rejected]),
+    .groups = "drop"
+  )
+
+t_test_summary
+```
+
+```{r t-test-power-plot, fig.width=7, fig.height=4}
+ggplot2::ggplot(
+  t_test_summary,
+  ggplot2::aes(x = true_mu, y = rejection_rate)
+) +
+  ggplot2::geom_line(color = "lightblue", linewidth = 0.8) +
+  ggplot2::geom_point(color = "lightblue", size = 2.5) +
+  ggplot2::scale_x_continuous(breaks = 0:6) +
+  ggplot2::scale_y_continuous(labels = scales::label_percent()) +
+  ggplot2::labs(
+    title = "Rejection rate by true mean",
+    x = "True mean",
+    y = "Proportion of tests rejecting the null"
+  ) + ggplot2::theme_minimal()
+```
+
+When the true mean is 0, the test rejects the null about 5% of the time. It is close to the expected Type I error rate. As the true mean moves farther from 0, power increases. It goes from about 19% at a true mean of 1 to nearly 100% at a true mean of 4.
+
+```{r t-test-estimate-plot, fig.width=7, fig.height=4}
+estimate_plot_data = t_test_summary |>
+  tidyr::pivot_longer(
+    cols = c(mean_estimate, mean_estimate_rejected),
+    names_to = "simulation_group",
+    values_to = "average_estimate"
+  )
+ggplot2::ggplot(
+  estimate_plot_data, ggplot2::aes(x = true_mu, y = average_estimate, color = simulation_group)
+) +
+  ggplot2::geom_abline(
+    intercept = 0, slope = 1, linetype = "dashed", color = "pink"
+  ) +
+  ggplot2::geom_line(linewidth = 0.8) +
+  ggplot2::geom_point(size = 2.5) +
+  ggplot2::scale_x_continuous(breaks = 0:6) +
+  ggplot2::scale_color_discrete(
+    breaks = c("mean_estimate", "mean_estimate_rejected"),
+    labels = c("All simulations", "Only tests that rejected the null")
+  ) +
+  ggplot2::labs(
+    title = "Average estimates by true mean",
+    x = "True mean",
+    y = "Average estimate",
+    color = NULL
+  ) +
+  ggplot2::theme_minimal() +ggplot2::theme(legend.position = "bottom")
+```
+
+Across all the simulations, the average estimates are pretty close to the true means. When I only look at the tests that rejected the null, the average estimate is about 2.2 when the true mean is 1. This happens because, with a small positive effect, samples that happen to give a larger estimate are more likely to reject the null. At a true mean of 0, large positive and negative estimates cancel out. For larger true means, almost every test rejects the null, so the two averages are close again.
